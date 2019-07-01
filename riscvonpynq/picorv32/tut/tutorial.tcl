@@ -50,6 +50,7 @@ xilinx.com:ip:processing_system7:5.5\
 xilinx.com:ip:axi_intc:4.1\
 xilinx.com:ip:xlslice:1.0\
 xilinx.com:ip:clk_wiz:5.4\
+cliffordwolf:ip:picorv32_axi:1.0\
 xilinx.com:ip:axi_bram_ctrl:4.0\
 xilinx.com:ip:blk_mem_gen:8.4\
 "
@@ -116,15 +117,40 @@ proc create_hier_cell_tutorialProcessor { parentCell nameHier } {
   current_bd_instance $hier_obj
 
   # Create interface pins
+  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_RISCV
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 S_AXI_MEM
 
   # Create pins
   create_bd_pin -dir O irq
+  create_bd_pin -dir O m_axi_riscv_aclk
   create_bd_pin -dir I -type rst por_resetn
   create_bd_pin -dir I -type clk riscv_clk
   create_bd_pin -dir I -type rst riscv_resetn
   create_bd_pin -dir I -type clk s_axi_aclk
   create_bd_pin -dir I -type rst s_axi_aresetn
+
+  # Create instance: picorv32, and set properties
+  set picorv32 [ create_bd_cell -type ip -vlnv cliffordwolf:ip:picorv32_axi:1.0 picorv32 ]
+  set_property -dict [ list \
+   CONFIG.CATCH_ILLINSN {false} \
+   CONFIG.CATCH_MISALIGN {false} \
+   CONFIG.ENABLE_COUNTERS {true} \
+   CONFIG.ENABLE_COUNTERS64 {false} \
+   CONFIG.ENABLE_DIV {true} \
+   CONFIG.ENABLE_FAST_MUL {true} \
+   CONFIG.ENABLE_IRQ_QREGS {false} \
+   CONFIG.ENABLE_IRQ_TIMER {false} \
+   CONFIG.ENABLE_REGS_16_31 {true} \
+   CONFIG.ENABLE_REGS_DUALPORT {true} \
+   CONFIG.STACKADDR {0x00000000} \
+ ] $picorv32
+
+  set_property -dict [ list \
+   CONFIG.SUPPORTS_NARROW_BURST {0} \
+   CONFIG.NUM_READ_OUTSTANDING {1} \
+   CONFIG.NUM_WRITE_OUTSTANDING {1} \
+   CONFIG.MAX_BURST_LENGTH {1} \
+ ] [get_bd_intf_pins /tutorialProcessor/picorv32/mem_axi]
 
   # Create instance: psBramController, and set properties
   set psBramController [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.0 psBramController ]
@@ -162,6 +188,9 @@ proc create_hier_cell_tutorialProcessor { parentCell nameHier } {
    CONFIG.SINGLE_PORT_BRAM {1} \
  ] $riscvBramController
 
+  # Create instance: riscvInterconnect, and set properties
+  set riscvInterconnect [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 riscvInterconnect ]
+
   # Create instance: riscvReset, and set properties
   set riscvReset [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 riscvReset ]
   set_property -dict [ list \
@@ -171,16 +200,21 @@ proc create_hier_cell_tutorialProcessor { parentCell nameHier } {
 
   # Create interface connections
   connect_bd_intf_net -intf_net Conn2 [get_bd_intf_pins S_AXI_MEM] [get_bd_intf_pins psBramController/S_AXI]
+  connect_bd_intf_net -intf_net Conn3 [get_bd_intf_pins M_AXI_RISCV] [get_bd_intf_pins riscvInterconnect/M00_AXI]
+  connect_bd_intf_net -intf_net axi_interconnect_0_M01_AXI [get_bd_intf_pins riscvBramController/S_AXI] [get_bd_intf_pins riscvInterconnect/M01_AXI]
+  connect_bd_intf_net -intf_net picorv32_mem_axi [get_bd_intf_pins picorv32/mem_axi] [get_bd_intf_pins riscvInterconnect/S00_AXI]
   connect_bd_intf_net -intf_net psBramController_BRAM_PORTA [get_bd_intf_pins psBramController/BRAM_PORTA] [get_bd_intf_pins riscvBram/BRAM_PORTB]
   connect_bd_intf_net -intf_net riscvBramController_BRAM_PORTA [get_bd_intf_pins riscvBram/BRAM_PORTA] [get_bd_intf_pins riscvBramController/BRAM_PORTA]
 
   # Create port connections
+  connect_bd_net -net ARESETN_1 [get_bd_pins riscvInterconnect/ARESETN] [get_bd_pins riscvReset/interconnect_aresetn]
   connect_bd_net -net aux_reset_in_1 [get_bd_pins riscv_resetn] [get_bd_pins riscvReset/aux_reset_in]
   connect_bd_net -net clk_in1_1 [get_bd_pins s_axi_aclk] [get_bd_pins psBramController/s_axi_aclk]
   connect_bd_net -net ext_reset_in_1 [get_bd_pins por_resetn] [get_bd_pins riscvReset/ext_reset_in]
-  connect_bd_net -net riscvReset_peripheral_aresetn [get_bd_pins riscvBramController/s_axi_aresetn] [get_bd_pins riscvReset/peripheral_aresetn]
+  connect_bd_net -net picorv32_trap [get_bd_pins irq] [get_bd_pins picorv32/trap]
+  connect_bd_net -net riscvReset_peripheral_aresetn [get_bd_pins picorv32/resetn] [get_bd_pins riscvBramController/s_axi_aresetn] [get_bd_pins riscvInterconnect/M00_ARESETN] [get_bd_pins riscvInterconnect/M01_ARESETN] [get_bd_pins riscvInterconnect/S00_ARESETN] [get_bd_pins riscvReset/peripheral_aresetn]
   connect_bd_net -net s_axi_aresetn_1 [get_bd_pins s_axi_aresetn] [get_bd_pins psBramController/s_axi_aresetn]
-  connect_bd_net -net subprocessorClk [get_bd_pins riscv_clk] [get_bd_pins riscvBramController/s_axi_aclk] [get_bd_pins riscvReset/slowest_sync_clk]
+  connect_bd_net -net subprocessorClk [get_bd_pins m_axi_riscv_aclk] [get_bd_pins riscv_clk] [get_bd_pins picorv32/clk] [get_bd_pins riscvBramController/s_axi_aclk] [get_bd_pins riscvInterconnect/ACLK] [get_bd_pins riscvInterconnect/M00_ACLK] [get_bd_pins riscvInterconnect/M01_ACLK] [get_bd_pins riscvInterconnect/S00_ACLK] [get_bd_pins riscvReset/slowest_sync_clk]
 
   # Restore current instance
   current_bd_instance $oldCurInst
@@ -1154,6 +1188,7 @@ proc create_root_design { parentCell } {
   create_hier_cell_tutorialProcessor [current_bd_instance .] tutorialProcessor
 
   # Create interface connections
+  connect_bd_intf_net -intf_net M_AXI_RISCV [get_bd_intf_pins processing_system7_0/S_AXI_HP0] [get_bd_intf_pins tutorialProcessor/M_AXI_RISCV]
   connect_bd_intf_net -intf_net S_AXI_MEM [get_bd_intf_pins psAxiInterconnect/M02_AXI] [get_bd_intf_pins tutorialProcessor/S_AXI_MEM]
   connect_bd_intf_net -intf_net S_AXI_PSX [get_bd_intf_pins processing_system7_0/M_AXI_GP0] [get_bd_intf_pins psAxiInterconnect/S00_AXI]
   connect_bd_intf_net -intf_net processing_system7_0_DDR [get_bd_intf_ports DDR] [get_bd_intf_pins processing_system7_0/DDR]
@@ -1166,18 +1201,21 @@ proc create_root_design { parentCell } {
   connect_bd_net -net FCLK_CLK1 [get_bd_pins processing_system7_0/FCLK_CLK1] [get_bd_pins processing_system7_0/S_AXI_HP2_ACLK]
   connect_bd_net -net S00_ARESETN_1 [get_bd_pins porReset/peripheral_aresetn] [get_bd_pins psAxiInterconnect/M00_ARESETN] [get_bd_pins psAxiInterconnect/M01_ARESETN] [get_bd_pins psAxiInterconnect/M02_ARESETN] [get_bd_pins psAxiInterconnect/S00_ARESETN] [get_bd_pins psInterruptController/s_axi_aresetn] [get_bd_pins subprocessorClk/s_axi_aresetn] [get_bd_pins tutorialProcessor/s_axi_aresetn]
   connect_bd_net -net irq [get_bd_pins irqConcat/In0] [get_bd_pins tutorialProcessor/irq]
+  connect_bd_net -net m_axi_riscv_aclk [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins tutorialProcessor/m_axi_riscv_aclk]
   connect_bd_net -net porReset_interconnect_aresetn [get_bd_pins porReset/interconnect_aresetn] [get_bd_pins psAxiInterconnect/ARESETN]
   connect_bd_net -net por_resetn [get_bd_pins porReset/ext_reset_in] [get_bd_pins processing_system7_0/FCLK_RESET0_N] [get_bd_pins tutorialProcessor/por_resetn]
   connect_bd_net -net processing_system7_0_GPIO_O [get_bd_pins processing_system7_0/GPIO_O] [get_bd_pins resetSlice/Din]
   connect_bd_net -net psirq [get_bd_pins processing_system7_0/IRQ_F2P] [get_bd_pins psInterruptController/irq]
   connect_bd_net -net riscv_resetn [get_bd_pins resetSlice/Dout] [get_bd_pins tutorialProcessor/riscv_resetn]
-  connect_bd_net -net subprocessorClk [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins subprocessorClk/clk_out1] [get_bd_pins tutorialProcessor/riscv_clk]
+  connect_bd_net -net subprocessorClk [get_bd_pins subprocessorClk/clk_out1] [get_bd_pins tutorialProcessor/riscv_clk]
   connect_bd_net -net xlconcat_0_dout [get_bd_pins irqConcat/dout] [get_bd_pins psInterruptController/intr]
 
   # Create address segments
   create_bd_addr_seg -range 0x00010000 -offset 0x40010000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs tutorialProcessor/psBramController/S_AXI/Mem0] SEG_psBramController_Mem0
   create_bd_addr_seg -range 0x00010000 -offset 0x40020000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs psInterruptController/S_AXI/Reg] SEG_psInterruptController_Reg
   create_bd_addr_seg -range 0x00001000 -offset 0x40001000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs subprocessorClk/s_axi_lite/Reg] SEG_subprocessorClk_Reg
+  create_bd_addr_seg -range 0x00010000 -offset 0x00000000 [get_bd_addr_spaces tutorialProcessor/picorv32/mem_axi] [get_bd_addr_segs tutorialProcessor/riscvBramController/S_AXI/Mem0] SEG_picorv32BramController_Mem0
+  create_bd_addr_seg -range 0x10000000 -offset 0x10000000 [get_bd_addr_spaces tutorialProcessor/picorv32/mem_axi] [get_bd_addr_segs processing_system7_0/S_AXI_HP0/HP0_DDR_LOWOCM] SEG_processing_system7_0_HP0_DDR_LOWOCM
 
 
   # Restore current instance

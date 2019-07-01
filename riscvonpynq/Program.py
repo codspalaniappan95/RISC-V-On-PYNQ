@@ -107,6 +107,8 @@ class Program:
         STKPTR is defined below.
 
         """
+        shutil.copy(os.path.join(proc.build_path, 'aes.c'), self.__path);
+        shutil.copy(os.path.join(proc.build_path, 'aes.h'), self.__path);
         bin_path = os.path.join(self.__path, self.__bin_name)
         make_args = ['make', "-C", proc.build_path, bin_path,
                      f'STKPTR={proc.stkptr}']
